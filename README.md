@@ -71,6 +71,27 @@ npm run dev
 | 结论评审队列 | `conclusion_review` | 评审记录 | 记录编号、实验编码、评审结论 |
 | 指标查询服务 | `metric_api` | 查询接口 | 接口编码、指标编码、服务对象 |
 
+## 曝光补传、回执与窗口修订
+
+曝光日志接入页在原列表/导出之外提供“CSV 补传、预览与导入回执”面板：
+
+1. 选择 CSV 后立即按文件行预览，服务端 `/api/exposure_log/imports/preview` 给出权威校验。
+2. 提交到 `/api/exposure_log/imports`，返回带 `import_no` 的逐行回执；数据行号从 CSV 第 2 行开始，拒收行保留 `file_row` 与中文 `reason`。
+3. 可在页面用导入编号重开回执，或调用 `GET /api/exposure_log/imports/{import_no}`；`/download` 下载含拒收原因、原回执行关联、影响作业和重算状态的 CSV。
+4. 回执中的受影响作业会跳到 `/metric_compute?jobs=...&receipt=...`。作业面板展示当前分母引用的导入回执、有效 `file_row/source_id`，以及可追踪的 `metric_result_revisions` 修订链。
+
+CSV 支持中文或常见英文字段名：`来源编号/source_id`、`实验编码/experiment_code`、
+`用户标识/user_id`、`分组名称/group_name`、`日志批次/batch_id`、`曝光时间/occurred_at`。
+
+核对口径：
+
+- `(来源编号, 实验编码)` 标识同一源记录；相同来源编号在不同实验下分别核计。
+- 已接受过的原样内容（包括已被更正取代的历史版本）重传只记为 `duplicate`，不会再次计入曝光，也不会把时间回滚到旧窗口。
+- 时间更正会把旧曝光行置为 `valid=false/status=已更正`，并插入新的当前有效行；因此 X7 这类记录最终只属于更正后的一个日期窗口。
+- 指标作业通过 `POST /api/metric_compute/{id}/recalculate` 读取当前有效曝光。分母快照保存在 `metric_denominators`，其中 `receipt_refs` 冻结该次计算实际引用的回执和有效行。
+- 更正跨越两个窗口时，两个已完成作业都会标记为 `待重算`；重算后旧结果保留为 `superseded` 修订，新修订通过 `revises` 指向旧结果。
+- `POST /api/metric_compute/{id}/claim` 与 `/commit` 提供分母领取凭证；领取后若更正修改了分母，旧凭证提交会返回 409，避免旧窗口出账覆盖更正。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。

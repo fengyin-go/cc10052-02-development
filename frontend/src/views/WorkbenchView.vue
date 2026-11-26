@@ -15,6 +15,15 @@
       </div>
     </header>
 
+    <ExposureImportPanel v-if="meta.key === 'exposure_log'" />
+
+    <MetricImpactPanel
+      v-if="meta.key === 'metric_compute' && impactJobIds.length"
+      :job-ids="impactJobIds"
+      :receipt-no="impactReceipt || undefined"
+      @recalculated="reload"
+    />
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -46,9 +55,21 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
+        <tr
+          v-for="row in rows"
+          :key="String(row.id)"
+          :data-testid="`row-${row.id}`"
+          :data-status="String(row.status)"
+          :data-impact="impactJobIds.includes(Number(row.id)) ? 'true' : 'false'"
+          :class="{ 'impact-row': impactJobIds.includes(Number(row.id)) }"
+        >
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td>
+            <span>{{ row.status }}</span>
+            <em v-if="row.recalc_status && row.recalc_status !== row.status" class="recalc-badge" :data-recalc="row.recalc_status">
+              {{ row.recalc_status }}
+            </em>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in meta.actions"
@@ -94,8 +115,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
+import ExposureImportPanel from '@/components/ExposureImportPanel.vue'
+import MetricImpactPanel from '@/components/MetricImpactPanel.vue'
 import {
   createEntry,
   downloadEntries,
@@ -106,25 +130,40 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
-const meta = moduleMeta(props.moduleKey)
+const route = useRoute()
+const meta = computed(() => moduleMeta(props.moduleKey))
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = meta.fields.slice(0, 3)
+const filterFields = computed(() => meta.value.fields.slice(0, 3))
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+
+const impactJobIds = computed<number[]>(() => {
+  const raw = route.query.jobs
+  const value = Array.isArray(raw) ? raw.join(',') : String(raw ?? '')
+  return value
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0)
+})
+const impactReceipt = computed(() => {
+  const raw = route.query.receipt
+  return Array.isArray(raw) ? raw[0] : raw
+})
+
 const stats = computed(() => [
-  { label: meta.metrics[0], value: total.value },
-  { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
+  { label: meta.value.metrics[0], value: total.value },
+  { label: meta.value.metrics[1], value: rows.value.filter((row) => row.status === meta.value.statuses[1]).length },
   {
-    label: meta.metrics[2],
-    value: rows.value.filter((row) => row.status === meta.statuses[meta.statuses.length - 1]).length,
+    label: meta.value.metrics[2],
+    value: rows.value.filter((row) => row.status === meta.value.statuses[meta.value.statuses.length - 1]).length,
   },
 ])
 const statusSummary = computed(() =>
-  meta.statuses.map((status) => ({
+  meta.value.statuses.map((status) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
@@ -138,14 +177,14 @@ function resetFilters() {
 async function exportRows() {
   errorMessage.value = ''
   try {
-    await downloadEntries(meta.key, filters.value)
+    await downloadEntries(meta.value.key, filters.value)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '导出失败'
   }
 }
 
 function openCreate() {
-  createValues.value = Object.fromEntries(meta.fields.map((field) => [field, '']))
+  createValues.value = Object.fromEntries(meta.value.fields.map((field) => [field, '']))
   errorMessage.value = ''
   showCreate.value = true
 }
@@ -154,7 +193,7 @@ async function submitCreate() {
   creating.value = true
   errorMessage.value = ''
   try {
-    const result = await createEntry(meta.key, createValues.value)
+    const result = await createEntry(meta.value.key, createValues.value)
     if (!result.ok) throw new Error(result.message)
     showCreate.value = false
     await reload()
@@ -168,7 +207,7 @@ async function submitCreate() {
 async function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
   try {
-    const result = await applyAction(meta.key, Number(row.id), action)
+    const result = await applyAction(meta.value.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)
     await reload()
   } catch (error) {
@@ -179,7 +218,7 @@ async function runAction(action: string, row: EntryRow) {
 async function reload() {
   errorMessage.value = ''
   try {
-    const payload = await listEntries(meta.key, filters.value)
+    const payload = await listEntries(meta.value.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
   } catch (error) {
@@ -187,5 +226,28 @@ async function reload() {
   }
 }
 
+watch(() => props.moduleKey, () => {
+  filters.value = {}
+  void reload()
+})
+
 onMounted(reload)
 </script>
+
+<style scoped>
+.impact-row td {
+  background: #fffaeb !important;
+  box-shadow: inset 3px 0 0 #f79009;
+}
+.recalc-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  color: #b54708;
+  font-size: 12px;
+  font-style: normal;
+}
+</style>

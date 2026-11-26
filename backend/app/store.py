@@ -16,7 +16,9 @@ class Store:
         }
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        # 业务模块以种子模块清单为准；运行期新增的回执、修订、分母快照等内部表
+        # 也放在 _tables 中，但不应被健康检查/概览误算成第 21 个业务模块。
+        return sorted(SEED_ROWS.keys())
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
